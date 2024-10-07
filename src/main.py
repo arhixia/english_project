@@ -15,6 +15,7 @@ translator = Translator()
 user_elective_selections = {}
 user_languages = {}
 user_reviews = {}
+pending_reviews = {}
 
 Session = sessionmaker(bind=engine)
 
@@ -127,39 +128,71 @@ def leave_review(message):
     unique_id = user_reviews[chat_id]
     review_text = message.text
     user_name = message.from_user.username or message.from_user.first_name
-    language = get_language(chat_id)
 
+    # Получаем язык пользователя из словаря user_languages
+    user_language = user_languages.get(chat_id, 'ru')  # По умолчанию русский язык
+
+    # Переводим текст отзыва на английский, только если выбран английский язык
+    if user_language == 'en':
+        review_text = translate_message(review_text, 'en')
+
+    # Сохраняем отзыв во временный словарь
+    pending_reviews[chat_id] = {'unique_id': unique_id, 'review_text': review_text}
+
+    # Создаем клавиатуру с кнопками "Да" и "Нет"
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("✅ Да", callback_data=f'confirm_review_{unique_id}_{review_text}'))
-    markup.add(types.InlineKeyboardButton("❌ Нет", callback_data='cancel_review'))
-    confirmation_message = f"Ваш отзыв: '{review_text}'. Подтвердите отзыв:"
-    bot.send_message(chat_id, translate_message(confirmation_message, language), reply_markup=markup)
+    if user_language == 'en':
+        markup.add(types.InlineKeyboardButton("✅ Yes", callback_data=f'confirm_review_{unique_id}'))
+        markup.add(types.InlineKeyboardButton("❌ No", callback_data='cancel_review'))
+        confirmation_message = f"Your review: '{message.text}'. Confirm your review:"
+    else:
+        markup.add(types.InlineKeyboardButton("✅ Да", callback_data=f'confirm_review_{unique_id}'))
+        markup.add(types.InlineKeyboardButton("❌ Нет", callback_data='cancel_review'))
+        confirmation_message = f"Ваш отзыв: '{message.text}'. Подтвердите отзыв:"
+
+    # Отправляем сообщение с просьбой подтвердить отзыв
+    bot.send_message(chat_id, confirmation_message, reply_markup=markup)
+
+
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_review_'))
 def confirm_review(call):
     chat_id = call.message.chat.id
-    data = call.data.split('_')
+    unique_id = int(call.data.split('_')[-1])  # Получаем уникальный ID электива из callback-data
 
-    unique_id, review_text = data[2], '_'.join(data[3:])
+    # Получаем сохраненный отзыв из временного словаря
+    review_data = pending_reviews.get(chat_id)
+    if not review_data or review_data['unique_id'] != unique_id:
+        bot.send_message(chat_id, "Произошла ошибка. Попробуйте оставить отзыв снова.")
+        return
+
+    review_text = review_data['review_text']
     user_name = call.from_user.username or call.from_user.first_name
 
-    with Session() as session:
-        elective = session.query(Elective).filter(Elective.unique_id == int(unique_id)).first()
+    session = Session()
+    elective = session.query(Elective).filter(Elective.unique_id == unique_id).first()
 
-        if elective:
-            new_review = Review(
-                elective_id=elective.id,
-                user_name=user_name,
-                text=review_text,
-                date_created=str(datetime.now())
-            )
-            session.add(new_review)
-            session.commit()
+    if elective:
+        new_review = Review(
+            elective_id=elective.id,
+            user_name=user_name,
+            text=review_text,
+            date_created=str(datetime.now())
+        )
+        session.add(new_review)
+        session.commit()
 
-    language = get_language(chat_id)
-    bot.send_message(chat_id, translate_message("Ваш отзыв успешно оставлен!", language))
-    user_reviews.pop(chat_id, None)
+        # Успешное сообщение
+        bot.send_message(chat_id, "Ваш отзыв успешно оставлен!")
+    else:
+        bot.send_message(chat_id, "Ошибка при оставлении отзыва. Электив не найден.")
+
+    session.close()
+
+    # Удаляем временные данные
+    del pending_reviews[chat_id]
+    del user_reviews[chat_id]
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_review')
