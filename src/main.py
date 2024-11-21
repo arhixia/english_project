@@ -1,10 +1,15 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from datetime import datetime
 import telebot
 from telebot import types
 from sqlalchemy.orm import sessionmaker
 from src.database import engine
-from src.models import Elective, Review
-from sqlalchemy import select
+
+from src.models import Elective,Review
+
 from src.config import TOKEN
 from sqlalchemy.orm import joinedload
 from googletrans import Translator
